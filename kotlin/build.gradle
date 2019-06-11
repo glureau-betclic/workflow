@@ -41,6 +41,7 @@ buildscript {
       'mavenPublishPlugin': '0.6.0',
       'mockito': '2.7.5',
       'mockitoKotlin': '1.5.0',
+      'unmock': '0.7.3',
       'rxjava2Extensions': '0.20.4',
   ]
 
@@ -89,6 +90,7 @@ buildscript {
           'interop': "com.github.akarnokd:rxjava2-interop:0.11.4",
           'extensions': "com.github.akarnokd:rxjava2-extensions:${versions.rxjava2Extensions}"
       ],
+      'unmock': "de.mobilej.unmock:UnMockPlugin:${versions.unmock}",
       'annotations': [
           'intellij': "org.jetbrains:annotations:${versions.intellijAnnotations}",
           'androidSupport': "com.android.support:support-annotations:26.0.2",
@@ -109,6 +111,7 @@ buildscript {
     classpath deps.kotlin.gradlePlugin
     classpath deps.ktlint
     classpath deps.mavenPublish
+    classpath deps.unmock
   }
 
   repositories {

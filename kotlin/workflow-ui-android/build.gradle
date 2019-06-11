@@ -16,6 +16,7 @@
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'com.vanniktech.maven.publish'
+apply plugin: 'de.mobilej.unmock'
 
 sourceCompatibility = JavaVersion.VERSION_1_7
 targetCompatibility = JavaVersion.VERSION_1_7
@@ -43,4 +44,40 @@ dependencies {
   implementation deps.kotlin.coroutines.core
   implementation deps.kotlin.coroutines.rx2
   implementation deps.kotlin.reflect
+
+  testImplementation deps.test.assertj
+  testImplementation deps.test.hamcrestCore
+  testImplementation deps.test.junit
+  testImplementation deps.test.mockito
+  testImplementation deps.rxjava2.extensions
+
+  unmock 'org.robolectric:android-all:4.3_r2-robolectric-0'
+}
+
+unMock {
+  keep "android.widget.BaseAdapter"
+  keep "android.widget.ArrayAdapter"
+  keep "android.os.Bundle"
+  keepStartingWith "android.database.MatrixCursor"
+  keep "android.database.AbstractCursor"
+  keep "android.database.CrossProcessCursor"
+  keepStartingWith "android.text.TextUtils"
+  keepStartingWith "android.util."
+  keepStartingWith "android.text."
+  keepStartingWith "android.content.ContentValues"
+  keepStartingWith "android.content.ComponentName"
+  keepStartingWith "android.content.ContentUris"
+  keepStartingWith "android.content.ContentProviderOperation"
+  keepStartingWith "android.content.ContentProviderResult"
+  keepStartingWith "android.content.UriMatcher"
+  keepStartingWith "android.content.Intent"
+  keep "android.location.Location"
+  keepStartingWith "android.content.res.Configuration"
+  keepStartingWith "org."
+  keepStartingWith "libcore."
+  keepStartingWith "com.android.internal.R"
+  keepStartingWith "com.android.internal.util."
+  keep "android.net.Uri"
+
+  keepAndRename "java.nio.charset.Charsets" to "xjava.nio.charset.Charsets"
 }
