@@ -46,7 +46,7 @@ import kotlin.reflect.jvm.jvmName
 internal class WorkflowRunnerViewModel<OutputT : Any>(
   override val viewRegistry: ViewRegistry,
   private val workflowHost: WorkflowHost<OutputT, Any>,
-  private val context: CoroutineContext
+  context: CoroutineContext
 ) : ViewModel(), WorkflowRunner<OutputT> {
 
   /**
