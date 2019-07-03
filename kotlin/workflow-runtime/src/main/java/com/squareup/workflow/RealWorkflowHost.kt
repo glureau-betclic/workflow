@@ -1,6 +1,7 @@
+@file:Suppress("DEPRECATION")
+
 package com.squareup.workflow
 
-import com.squareup.workflow.WorkflowHost.RenderingAndSnapshot
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart.ATOMIC

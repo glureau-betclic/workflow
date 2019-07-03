@@ -13,10 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+@file:Suppress("DEPRECATION")
+
 package com.squareup.workflow
 
 import com.squareup.workflow.WorkflowHost.Factory
-import com.squareup.workflow.WorkflowHost.RenderingAndSnapshot
 import com.squareup.workflow.internal.WorkflowNode
 import com.squareup.workflow.internal.id
 import kotlinx.coroutines.CancellationException
@@ -46,15 +47,8 @@ private val DEFAULT_WORKFLOW_COROUTINE_NAME = CoroutineName("WorkflowHost")
  * [start] must be called to start the workflow running, and then [cancel] must be called to stop
  * it.
  */
+@Deprecated("Use runWorkflow instead.")
 interface WorkflowHost<out OutputT : Any, out RenderingT> {
-
-  /**
-   * Emitted from [renderingsAndSnapshots] after every render pass.
-   */
-  data class RenderingAndSnapshot<out RenderingT>(
-    val rendering: RenderingT,
-    val snapshot: Snapshot
-  )
 
   /**
    * Stream of [renderings and snapshots][RenderingAndSnapshot] from the root workflow.
@@ -105,6 +99,7 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
    * @param baseContext The [CoroutineContext] for the coroutine that the workflow runtime is
    * invoked on. This context may be overridden by passing a context to any of the [run] methods.
    */
+  @Deprecated("Use runWorkflow instead.")
   class Factory(private val baseContext: CoroutineContext) {
 
     /**
@@ -125,6 +120,7 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
      * @param context The [CoroutineContext] used to run the workflow tree. Added to the [Factory]'s
      * context.
      */
+    @Deprecated("Use runWorkflow instead.")
     @UseExperimental(ExperimentalCoroutinesApi::class)
     fun <InputT, OutputT : Any, RenderingT> run(
       workflow: Workflow<InputT, OutputT, RenderingT>,
@@ -135,7 +131,7 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
         // Put the coroutine name first so the passed-in contexts can override it.
         context = DEFAULT_WORKFLOW_COROUTINE_NAME + baseContext + context
     ) { onRendering, onOutput ->
-      runWorkflowTree(
+      runWorkflowLoop(
           workflow = workflow.asStatefulWorkflow(),
           inputs = inputs,
           initialSnapshot = snapshot,
@@ -144,6 +140,7 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
       )
     }
 
+    @Deprecated("Use runWorkflow instead.")
     @UseExperimental(ExperimentalCoroutinesApi::class)
     fun <OutputT : Any, RenderingT> run(
       workflow: Workflow<Unit, OutputT, RenderingT>,
@@ -159,6 +156,7 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
      * Instead, your module should have a test dependency on `pure-v2-testing` and you should call
      * the testing extension method defined there on your workflow itself.
      */
+    @Deprecated("Use runWorkflow instead.")
     @TestOnly
     @UseExperimental(ExperimentalCoroutinesApi::class)
     fun <InputT, StateT, OutputT : Any, RenderingT> runTestFromState(
@@ -168,7 +166,7 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
     ): WorkflowHost<OutputT, RenderingT> = RealWorkflowHost(
         context = DEFAULT_WORKFLOW_COROUTINE_NAME + baseContext
     ) { onRendering, onOutput ->
-      runWorkflowTree(
+      runWorkflowLoop(
           workflow = workflow.asStatefulWorkflow(),
           inputs = inputs,
           initialSnapshot = null,
@@ -185,10 +183,10 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
  * updates by calling [onRendering] and [onOutput].
  *
  * This function is the lowest-level entry point into the runtime. Don't call this directly, instead
- * use [WorkflowHost.Factory] to create a [WorkflowHost].
+ * call [runWorkflow].
  */
 @UseExperimental(FlowPreview::class, ExperimentalCoroutinesApi::class)
-suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowTree(
+suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowLoop(
   workflow: StatefulWorkflow<InputT, StateT, OutputT, RenderingT>,
   inputs: Flow<InputT>,
   initialSnapshot: Snapshot?,
