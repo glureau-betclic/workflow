@@ -25,6 +25,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import org.jetbrains.annotations.TestOnly
+import kotlin.contracts.ExperimentalContracts
+import kotlin.contracts.InvocationKind.AT_MOST_ONCE
+import kotlin.contracts.contract
 
 /**
  * Tuple of rendering and snapshot used by [runWorkflow].
@@ -34,10 +37,16 @@ data class RenderingAndSnapshot<out RenderingT>(
   val snapshot: Snapshot
 )
 
+@UseExperimental(ExperimentalCoroutinesApi::class)
+internal typealias Configurator <O, R> = CoroutineScope.(
+  renderingsAndSnapshots: Flow<RenderingAndSnapshot<R>>,
+  outputs: Flow<O>
+) -> Unit
+
 /**
  *  TODO write documentation
  */
-@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class)
+@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class, ExperimentalContracts::class)
 suspend fun <InputT, OutputT : Any, RenderingT> runWorkflow(
   workflow: Workflow<InputT, OutputT, RenderingT>,
   inputs: Flow<InputT>,
@@ -46,19 +55,22 @@ suspend fun <InputT, OutputT : Any, RenderingT> runWorkflow(
     renderingsAndSnapshots: Flow<RenderingAndSnapshot<RenderingT>>,
     outputs: Flow<OutputT>
   ) -> Unit
-): Nothing = runWorkflowImpl(
-    workflow.asStatefulWorkflow(),
-    inputs,
-    initialSnapshot = initialSnapshot,
-    initialState = null,
-    beforeStart = beforeStart
-)
+): Nothing {
+  contract { callsInPlace(beforeStart, AT_MOST_ONCE) }
+  runWorkflowImpl(
+      workflow.asStatefulWorkflow(),
+      inputs,
+      initialSnapshot = initialSnapshot,
+      initialState = null,
+      beforeStart = beforeStart
+  )
+}
 
 /**
  *  TODO write documentation
  */
 @TestOnly
-@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class)
+@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class, ExperimentalContracts::class)
 suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowForTestFromState(
   workflow: StatefulWorkflow<InputT, StateT, OutputT, RenderingT>,
   inputs: Flow<InputT>,
@@ -67,13 +79,16 @@ suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowForTestFromSt
     renderingsAndSnapshots: Flow<RenderingAndSnapshot<RenderingT>>,
     outputs: Flow<OutputT>
   ) -> Unit
-): Nothing = runWorkflowImpl(
-    workflow,
-    inputs,
-    initialState = initialState,
-    initialSnapshot = null,
-    beforeStart = beforeStart
-)
+): Nothing {
+  contract { callsInPlace(beforeStart, AT_MOST_ONCE) }
+  runWorkflowImpl(
+      workflow,
+      inputs,
+      initialState = initialState,
+      initialSnapshot = null,
+      beforeStart = beforeStart
+  )
+}
 
 /**
  *  TODO write documentation
@@ -84,18 +99,18 @@ private suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowImpl(
   inputs: Flow<InputT>,
   initialSnapshot: Snapshot?,
   initialState: StateT?,
-  beforeStart: CoroutineScope.(
-    renderingsAndSnapshots: Flow<RenderingAndSnapshot<RenderingT>>,
-    outputs: Flow<OutputT>
-  ) -> Unit
+  beforeStart: Configurator<OutputT, RenderingT>
 ): Nothing = coroutineScope {
   val renderingsAndSnapshots = ConflatedBroadcastChannel<RenderingAndSnapshot<RenderingT>>()
   val outputs = BroadcastChannel<OutputT>(capacity = 1)
 
   // Ensure we close the channels when we're done, so that they propagate errors.
   coroutineContext[Job]!!.invokeOnCompletion { cause ->
-    renderingsAndSnapshots.close(cause)
-    outputs.close(cause)
+    // We need to unwrap the cancellation exception so that we *complete* the channels instead
+    // of cancelling them if our coroutine was merely cancelled.
+    val realCause = cause?.unwrapCancellationCause()
+    renderingsAndSnapshots.close(realCause)
+    outputs.close(realCause)
   }
 
   // Give the caller a chance to start collecting outputs.
@@ -103,7 +118,8 @@ private suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowImpl(
 
   // Run the workflow processing loop forever, or until it fails or is cancelled.
   runWorkflowLoop(
-      workflow.asStatefulWorkflow(), inputs,
+      workflow,
+      inputs,
       initialSnapshot = initialSnapshot,
       initialState = initialState,
       onRendering = renderingsAndSnapshots::send,

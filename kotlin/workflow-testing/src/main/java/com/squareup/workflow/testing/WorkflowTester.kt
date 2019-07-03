@@ -17,27 +17,32 @@
 
 package com.squareup.workflow.testing
 
+import com.squareup.workflow.RenderingAndSnapshot
 import com.squareup.workflow.Snapshot
 import com.squareup.workflow.StatefulWorkflow
 import com.squareup.workflow.Workflow
 import com.squareup.workflow.WorkflowHost
+import com.squareup.workflow.runWorkflowForTestFromState
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.jetbrains.annotations.TestOnly
@@ -59,7 +64,8 @@ import kotlin.coroutines.EmptyCoroutineContext
  */
 class WorkflowTester<InputT, OutputT : Any, RenderingT> @TestOnly internal constructor(
   private val inputs: SendChannel<InputT>,
-  private val host: WorkflowHost<OutputT, RenderingT>,
+  private val renderingsAndSnapshotsFlow: Flow<RenderingAndSnapshot<RenderingT>>,
+  private val outputsFlow: Flow<OutputT>,
   private val context: CoroutineContext
 ) {
 
@@ -73,7 +79,7 @@ class WorkflowTester<InputT, OutputT : Any, RenderingT> @TestOnly internal const
     // are still allowed to handle the exceptions from WorkflowHost streams explicitly, since they
     // need to close the test channels.
     val scope = CoroutineScope(context + NonCancellable)
-    host.renderingsAndSnapshots
+    renderingsAndSnapshotsFlow
         .onEach { (rendering, snapshot) ->
           renderings.send(rendering)
           snapshots.send(snapshot)
@@ -84,12 +90,10 @@ class WorkflowTester<InputT, OutputT : Any, RenderingT> @TestOnly internal const
         }
         .launchIn(scope)
 
-    host.outputs
+    outputsFlow
         .onEach { outputs.send(it) }
         .onCompletion { e -> outputs.close(e) }
         .launchIn(scope)
-
-    host.start()
   }
 
   /**
@@ -245,11 +249,34 @@ fun <T, InputT, StateT, OutputT : Any, RenderingT>
       initialState: StateT,
       context: CoroutineContext = EmptyCoroutineContext,
       block: WorkflowTester<InputT, OutputT, RenderingT>.() -> T
-    ): T = test(block, context) { factory, inputs ->
+    ): T  /*test(block, context) { factory, inputs ->
       inputs.offer(input)
       factory.runTestFromState(this, inputs.asFlow(), initialState)
-    }
+    }*/
 // @formatter:on
+{
+  val result = CompletableDeferred<T>()
+  val inputs = BroadcastChannel<InputT>(capacity = 1)
+  runBlocking {
+    try {
+      runWorkflowForTestFromState(this@testFromState, inputs.asFlow(), initialState) { r, o ->
+        val workflowJob = coroutineContext[Job]!!
+        workflowJob.invokeOnCompletion {
+          result.cancel(it as? CancellationException ?: CancellationException("", it))
+        }
+
+        val tester = WorkflowTester(inputs, r, o, coroutineContext)
+        tester.start()
+        launch {
+          result.complete(block(tester))
+          workflowJob.cancel()
+        }
+      }
+    } catch (e: CancellationException) {
+      return@runBlocking result.await()
+    }
+  }
+}
 
 /**
  * Creates a [WorkflowTester] to run this workflow for unit testing.
@@ -279,32 +306,33 @@ private fun <T, I, O : Any, R> test(
   // which would get dropped by an unsubscribed BroadcastChannel.
   val inputs = Channel<I>(capacity = 1)
   @Suppress("ReplaceSingleLineLet")
-  val host = WorkflowHost.Factory(context)
-      .let { starter(it, inputs) }
-      .let { WorkflowTester(inputs, it, context) }
-      .apply { start() }
+//  val host = WorkflowHost.Factory(context)
+//      .let { starter(it, inputs) }
+//      .let { WorkflowTester(inputs, it, context) }
+//      .apply { start() }
+//
 
-  var error: Throwable? = null
-  try {
-    return testBlock(host)
-  } catch (e: Throwable) {
-    error = e
-    throw e
-  } finally {
-    if (error != null) {
-      context.cancel(
-          if (error is CancellationException) error else CancellationException(null, error)
-      )
-      val cancellationCause = context[Job]!!.getCancellationException()
-          .cause
-      if (cancellationCause != error && cancellationCause != null) {
-        error.addSuppressed(cancellationCause)
-      }
-    } else {
-      // Cancel the Job to ensure everything gets cleaned up.
-      context.cancel()
-    }
-  }
+//  var error: Throwable? = null
+//  try {
+//    return testBlock(host)
+//  } catch (e: Throwable) {
+//    error = e
+//    throw e
+//  } finally {
+//    if (error != null) {
+//      context.cancel(
+//          if (error is CancellationException) error else CancellationException(null, error)
+//      )
+//      val cancellationCause = context[Job]!!.getCancellationException()
+//          .cause
+//      if (cancellationCause != error && cancellationCause != null) {
+//        error.addSuppressed(cancellationCause)
+//      }
+//    } else {
+//      // Cancel the Job to ensure everything gets cleaned up.
+//      context.cancel()
+//    }
+//  }
 }
 
 /**

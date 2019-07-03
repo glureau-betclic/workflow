@@ -130,14 +130,8 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
     ): WorkflowHost<OutputT, RenderingT> = RealWorkflowHost(
         // Put the coroutine name first so the passed-in contexts can override it.
         context = DEFAULT_WORKFLOW_COROUTINE_NAME + baseContext + context
-    ) { onRendering, onOutput ->
-      runWorkflowLoop(
-          workflow = workflow.asStatefulWorkflow(),
-          inputs = inputs,
-          initialSnapshot = snapshot,
-          onRendering = onRendering,
-          onOutput = onOutput
-      )
+    ) { configurator ->
+      runWorkflow(workflow, inputs, snapshot, configurator)
     }
 
     @Deprecated("Use runWorkflow instead.")
@@ -165,15 +159,8 @@ interface WorkflowHost<out OutputT : Any, out RenderingT> {
       initialState: StateT
     ): WorkflowHost<OutputT, RenderingT> = RealWorkflowHost(
         context = DEFAULT_WORKFLOW_COROUTINE_NAME + baseContext
-    ) { onRendering, onOutput ->
-      runWorkflowLoop(
-          workflow = workflow.asStatefulWorkflow(),
-          inputs = inputs,
-          initialSnapshot = null,
-          initialState = initialState,
-          onRendering = onRendering,
-          onOutput = onOutput
-      )
+    ) { configurator ->
+      runWorkflowForTestFromState(workflow, inputs, initialState, configurator)
     }
   }
 }

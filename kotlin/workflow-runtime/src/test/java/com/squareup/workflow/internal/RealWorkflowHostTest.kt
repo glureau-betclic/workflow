@@ -1,9 +1,10 @@
 package com.squareup.workflow.internal
 
+import com.squareup.workflow.Configurator
 import com.squareup.workflow.RealWorkflowHost
+import com.squareup.workflow.RenderingAndSnapshot
 import com.squareup.workflow.Snapshot
-import com.squareup.workflow.WorkflowHost.RenderingAndSnapshot
-import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -11,11 +12,10 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
-import kotlinx.coroutines.channels.produce
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
@@ -24,7 +24,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -39,7 +38,7 @@ class RealWorkflowHostTest {
 
   @Test fun `exception from run doesn't cancel base context`() {
     val baseJob = Job()
-    val host = RealWorkflowHost<Nothing, Unit>(Unconfined + baseJob) { _, _ ->
+    val host = RealWorkflowHost<Nothing, Unit>(Unconfined + baseJob) {
       throw ExpectedException()
     }
     val job = host.start()
@@ -49,7 +48,7 @@ class RealWorkflowHostTest {
   }
 
   @Test fun `exception from run is propagated to start job`() {
-    val host = RealWorkflowHost<Nothing, Unit>(Unconfined) { _, _ ->
+    val host = RealWorkflowHost<Nothing, Unit>(Unconfined) {
       throw ExpectedException()
     }
     val job = host.start()
@@ -60,7 +59,7 @@ class RealWorkflowHostTest {
 
   @Suppress("ReplaceSingleLineLet")
   @Test fun `exceptions from run are propagated to flows`() {
-    val host = RealWorkflowHost<Unit, Unit>(Unconfined) { _, _ ->
+    val host = RealWorkflowHost<Unit, Unit>(Unconfined) {
       throw ExpectedException()
     }
     host.start()
@@ -81,8 +80,13 @@ class RealWorkflowHostTest {
   }
 
   @Test fun `exceptions from renderings collector cancels host`() {
-    val host = RealWorkflowHost<Unit, Unit>(Unconfined) { onRendering, _ ->
-      onRendering(RenderingAndSnapshot(Unit, Snapshot.EMPTY))
+    val host = RealWorkflowHost<Unit, Unit>(Unconfined) { configurator ->
+      configurator(
+          CoroutineScope(Unconfined),
+          flowOf(RenderingAndSnapshot(Unit, Snapshot.EMPTY)),
+          emptyFlow()
+      )
+      suspendCancellableCoroutine<Nothing> { }
     }
 
     val job = GlobalScope.launch(Unconfined + Job()) {
@@ -96,8 +100,13 @@ class RealWorkflowHostTest {
   }
 
   @Test fun `exceptions from outputs collector cancels host`() {
-    val host = RealWorkflowHost<Unit, Unit>(Unconfined) { _, onOutput ->
-      onOutput(Unit)
+    val host = RealWorkflowHost<Unit, Unit>(Unconfined) { configurator ->
+      configurator(
+          CoroutineScope(Unconfined),
+          emptyFlow(),
+          flowOf(Unit)
+      )
+      suspendCancellableCoroutine<Nothing> { }
     }
 
     val job = GlobalScope.launch(Unconfined) {
@@ -165,8 +174,12 @@ class RealWorkflowHostTest {
   }
 
   @Test fun `renderings flow replays to new collectors`() {
-    val host = RealWorkflowHost<Nothing, String>(Unconfined) { onRendering, _ ->
-      onRendering(RenderingAndSnapshot("foo", Snapshot.EMPTY))
+    val host = RealWorkflowHost<Nothing, String>(Unconfined) { configurator ->
+      configurator(
+          CoroutineScope(Unconfined),
+          flowOf(RenderingAndSnapshot("foo", Snapshot.EMPTY)),
+          emptyFlow()
+      )
       suspendCancellableCoroutine<Nothing> { }
     }
     host.start()
@@ -175,24 +188,17 @@ class RealWorkflowHostTest {
     assertEquals("foo", firstRendering.rendering)
   }
 
-  @Test fun `outputs flow does not replay to new collectors`() {
-    val trigger = CompletableDeferred<Unit>()
-    val host = RealWorkflowHost<String, Unit>(Unconfined) { _, onOutput ->
-      onOutput("one")
-      trigger.await()
-      onOutput("two")
-    }
-    host.start()
-
-    val outputs = GlobalScope.async(Unconfined) { host.outputs.toList() }
-    trigger.complete(Unit)
-    assertEquals(listOf("two"), runBlocking { outputs.await() })
-  }
-
   @Test fun `renderings flow is multicasted`() {
-    val host = RealWorkflowHost<Nothing, String>(Unconfined) { onRendering, _ ->
-      onRendering(RenderingAndSnapshot("one", Snapshot.EMPTY))
-      onRendering(RenderingAndSnapshot("two", Snapshot.EMPTY))
+    val host = RealWorkflowHost<Nothing, String>(Unconfined) { configurator ->
+      configurator(
+          CoroutineScope(Unconfined),
+          flowOf(
+              RenderingAndSnapshot("one", Snapshot.EMPTY),
+              RenderingAndSnapshot("two", Snapshot.EMPTY)
+          ),
+          emptyFlow()
+      )
+      suspendCancellableCoroutine<Nothing> { }
     }
     val renderings1 = GlobalScope.async(Unconfined) {
       host.renderingsAndSnapshots.map { it.rendering }
@@ -209,9 +215,13 @@ class RealWorkflowHostTest {
   }
 
   @Test fun `outputs flow is multicasted`() {
-    val host = RealWorkflowHost<String, Unit>(Unconfined) { _, onOutput ->
-      onOutput("one")
-      onOutput("two")
+    val host = RealWorkflowHost<String, Unit>(Unconfined) { configurator ->
+      configurator(
+          CoroutineScope(Unconfined),
+          emptyFlow(),
+          flowOf("one", "two")
+      )
+      suspendCancellableCoroutine<Nothing> { }
     }
     val outputs1 = GlobalScope.async(Unconfined) {
       host.outputs.toList()
@@ -227,7 +237,7 @@ class RealWorkflowHostTest {
 
   @Test fun `start is idempotent`() {
     var starts = 0
-    val host = RealWorkflowHost<Nothing, Unit>(Unconfined) { _, _ ->
+    val host = RealWorkflowHost<Nothing, Unit>(Unconfined) {
       starts++
       suspendCancellableCoroutine<Nothing> { }
     }
@@ -246,70 +256,31 @@ class RealWorkflowHostTest {
   }
 
   @Test fun `renderings flow has no backpressure`() {
-    val host = RealWorkflowHost<Nothing, String>(Unconfined) { onRendering, _ ->
-      onRendering(RenderingAndSnapshot("one", Snapshot.EMPTY))
-      onRendering(RenderingAndSnapshot("two", Snapshot.EMPTY))
+    val host = RealWorkflowHost<Nothing, String>(Unconfined) { configurator ->
+      configurator(
+          CoroutineScope(Unconfined),
+          flowOf(
+              RenderingAndSnapshot("one", Snapshot.EMPTY),
+              RenderingAndSnapshot("two", Snapshot.EMPTY),
+              RenderingAndSnapshot("three", Snapshot.EMPTY)
+          ),
+          emptyFlow()
+      )
       suspendCancellableCoroutine<Nothing> { }
     }
     host.start()
 
-    val firstRendering = runBlocking { host.renderingsAndSnapshots.first() }
-    assertEquals("two", firstRendering.rendering)
-  }
-
-  @Test fun `outputs flow has no backpressure when not subscribed`() {
-    val emittedOutputs = Channel<String>(UNLIMITED)
-    val host = RealWorkflowHost<String, Unit>(Unconfined) { _, onOutput ->
-      onOutput("one")
-      emittedOutputs.send("one")
-      onOutput("two")
-      emittedOutputs.send("two")
-      emittedOutputs.close()
+    runBlocking {
+      val renderings = host.renderingsAndSnapshots.map { it.rendering }
+          .toList()
+      assertEquals(listOf("one", "three"), renderings)
     }
-    host.start()
-
-    assertEquals("one", emittedOutputs.poll())
-    assertEquals("two", emittedOutputs.poll())
-  }
-
-  @Test fun `outputs flow honors backpressure`() {
-    val emittedOutputs = Channel<Int>(UNLIMITED)
-    val host = RealWorkflowHost<Int, Unit>(Unconfined) { _, onOutput ->
-      for (i in 0 until 10) {
-        onOutput(i)
-        emittedOutputs.send(i)
-      }
-      emittedOutputs.close()
-    }
-    val outputs = GlobalScope.produce(Unconfined, capacity = 0) {
-      host.outputs.collect {
-        send(it)
-      }
-    }
-    host.start()
-
-    // There is effectively a two-element buffer: the BroadcastChannel has a buffer of one, and
-    // the produce coroutine above acts as another buffer.
-    assertEquals(0, emittedOutputs.poll())
-    assertEquals(1, emittedOutputs.poll())
-    assertNull(emittedOutputs.poll())
-
-    // Reading one item out of the actual outputs Flow should allow another one to get buffered.
-    assertEquals(0, outputs.poll())
-    assertEquals(2, emittedOutputs.poll())
-    assertNull(emittedOutputs.poll())
-
-    assertEquals(1, outputs.poll())
-    assertEquals(3, emittedOutputs.poll())
-    assertNull(emittedOutputs.poll())
-    assertEquals(2, outputs.poll())
   }
 
   @Suppress("UNUSED_PARAMETER")
   private suspend fun <O, R> runForever(
-    onRendering: suspend (RenderingAndSnapshot<R>) -> Unit,
-    onOutput: suspend (O) -> Unit
-  ) {
+    configurator: Configurator<O, R>
+  ): Nothing {
     suspendCancellableCoroutine<Nothing> { }
   }
 

@@ -3,16 +3,19 @@
 package com.squareup.workflow
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart.ATOMIC
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.BroadcastChannel
-import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.switchMap
 import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
 
@@ -25,13 +28,10 @@ import kotlin.coroutines.CoroutineContext
  * that will cause [renderingsAndSnapshots] and [outputs] to emit, respectively. If any exception
  * is thrown, those Flows will both rethrow the exception.
  */
-@UseExperimental(ExperimentalCoroutinesApi::class)
+@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class)
 internal class RealWorkflowHost<O : Any, R>(
   context: CoroutineContext,
-  private val run: suspend (
-    onRendering: suspend (RenderingAndSnapshot<R>) -> Unit,
-    onOutput: suspend (O) -> Unit
-  ) -> Unit
+  private val run: suspend (Configurator<O, R>) -> Nothing
 ) : WorkflowHost<O, R> {
 
   /**
@@ -40,40 +40,43 @@ internal class RealWorkflowHost<O : Any, R>(
    */
   private val scope = CoroutineScope(context + SupervisorJob(parent = context[Job]))
 
-  private val _renderingsAndSnapshots = ConflatedBroadcastChannel<RenderingAndSnapshot<R>>()
-  private val _outputs = BroadcastChannel<O>(capacity = 1)
+  // todo rename
+  private val stuff = CompletableDeferred<Pair<Flow<RenderingAndSnapshot<R>>, Flow<O>>>()
+  private val stuffFlow = stuff::await.asFlow()
+      .catch { e ->
+        e.unwrapCancellationCause()
+            ?.let { throw it }
+      }
 
   private var job: Job? = null
 
-  @UseExperimental(FlowPreview::class)
-  override val renderingsAndSnapshots: Flow<RenderingAndSnapshot<R>>
-    get() = _renderingsAndSnapshots.asFlow()
+  @UseExperimental(InternalCoroutinesApi::class)
+  override val renderingsAndSnapshots: Flow<RenderingAndSnapshot<R>> =
+    stuffFlow.switchMap { it.first }
+        .conflate()
 
-  @UseExperimental(FlowPreview::class)
-  override val outputs: Flow<O>
-    get() = _outputs.asFlow()
+  override val outputs: Flow<O> = stuffFlow.switchMap { it.second }
 
   override fun start(): Job {
     return job ?: scope
         // We need to launch atomically so that, if scope is already cancelled, the coroutine is
         // still allowed to handle the error by closing the channels.
         .launch(start = ATOMIC) {
-          val result = runCatching {
-            run(_renderingsAndSnapshots::send, _outputs::send)
+          try {
+            @Suppress("IMPLICIT_NOTHING_AS_TYPE_PARAMETER")
+            run { renderings, outputs ->
+              stuff.complete(Pair(renderings, outputs))
+            }
+          } catch (e: Throwable) {
+            stuff.completeExceptionally(e)
+            throw e
           }
-          // We need to unwrap the cancellation exception so that we *complete* the channels instead
-          // of cancelling them if our coroutine was merely cancelled.
-          val error = result.exceptionOrNull()
-              ?.unwrapCancellationCause()
-          _renderingsAndSnapshots.close(error)
-          _outputs.close(error)
-          result.getOrThrow()
         }
         .also { job = it }
   }
 }
 
-private tailrec fun Throwable.unwrapCancellationCause(): Throwable? {
+internal tailrec fun Throwable.unwrapCancellationCause(): Throwable? {
   if (this !is CancellationException) return this
   return cause?.unwrapCancellationCause()
 }
