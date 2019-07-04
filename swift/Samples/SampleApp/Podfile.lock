@@ -2,24 +2,24 @@ PODS:
   - ReactiveSwift (5.0.0):
     - Result (~> 4.1)
   - Result (4.1.0)
-  - Workflow (0.16.0):
+  - Workflow (0.18.0):
     - ReactiveSwift (~> 5.0.0)
     - Result
-  - Workflow/Tests (0.16.0):
+  - Workflow/Tests (0.18.0):
     - ReactiveSwift (~> 5.0.0)
     - Result
-  - WorkflowTesting (0.16.0):
+  - WorkflowTesting (0.18.0):
     - ReactiveSwift (~> 5.0.0)
     - Result
-    - Workflow (= 0.16.0)
-  - WorkflowTesting/Tests (0.16.0):
+    - Workflow (= 0.18.0)
+  - WorkflowTesting/Tests (0.18.0):
     - ReactiveSwift (~> 5.0.0)
     - Result
-    - Workflow (= 0.16.0)
-  - WorkflowUI (0.16.0):
-    - Workflow (= 0.16.0)
-  - WorkflowUI/Tests (0.16.0):
-    - Workflow (= 0.16.0)
+    - Workflow (= 0.18.0)
+  - WorkflowUI (0.18.0):
+    - Workflow (= 0.18.0)
+  - WorkflowUI/Tests (0.18.0):
+    - Workflow (= 0.18.0)
 
 DEPENDENCIES:
   - Workflow (from `../../../Workflow.podspec`)
@@ -45,9 +45,9 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   ReactiveSwift: bd4c122943593e67cb441409370c5c1e3cb32791
   Result: bd966fac789cc6c1563440b348ab2598cc24d5c7
-  Workflow: 4d5a37487b081d8e8d2f2afcd1137bf6b996c080
-  WorkflowTesting: 8cfbe3736fbac9c3cc00f38c324509eb4cd580c6
-  WorkflowUI: cae471560c93d53a820430a4dcea7de6f3af8e22
+  Workflow: b22e90606c8ff231440d56e0f760bf740e7e22a0
+  WorkflowTesting: 78d8ccac628077a62553a44bbbbcddd9755e3191
+  WorkflowUI: 9ba34f7def4cd6a33bd3b801fc6b3082b300d7f1
 
 PODFILE CHECKSUM: 84bd3a649871725823ef9da1cbee53456bac452a
 

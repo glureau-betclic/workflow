@@ -5,14 +5,37 @@ import Workflow
 /// for a `render` test to pass.
 public struct RenderExpectations<WorkflowType: Workflow> {
     var expectedState: ExpectedState<WorkflowType>?
+    var expectedOutput: ExpectedOutput<WorkflowType>?
     var expectedWorkers: [ExpectedWorker]
+    var expectedWorkflows: [ExpectedWorkflow]
 
     public init(
         expectedState: ExpectedState<WorkflowType>? = nil,
-        expectedWorkers: [ExpectedWorker] = []) {
+        expectedOutput: ExpectedOutput<WorkflowType>? = nil,
+        expectedWorkers: [ExpectedWorker] = [],
+        expectedWorkflows: [ExpectedWorkflow] = []) {
 
         self.expectedState = expectedState
+        self.expectedOutput = expectedOutput
         self.expectedWorkers = expectedWorkers
+        self.expectedWorkflows = expectedWorkflows
+    }
+}
+
+
+public struct ExpectedOutput<WorkflowType: Workflow> {
+    var output: WorkflowType.Output
+    var isEquivalent: (WorkflowType.Output, WorkflowType.Output) -> Bool
+
+    public init<Output>(output: Output, isEquivalent: @escaping (Output, Output) -> Bool) where Output == WorkflowType.Output {
+        self.output = output
+        self.isEquivalent = isEquivalent
+    }
+
+    public init<Output>(output: Output) where Output == WorkflowType.Output, Output: Equatable {
+        self.init(output: output, isEquivalent: { (expected, actual) in
+            return expected == actual
+        })
     }
 }
 
@@ -61,5 +84,20 @@ public struct ExpectedWorker {
         }
 
         return outputMap(output)
+    }
+}
+
+
+public struct ExpectedWorkflow {
+    var workflowType: Any.Type
+    var key: String
+    var rendering: Any
+    private var output: Any?
+
+    public init<WorkflowType: Workflow>(type: WorkflowType.Type, key: String = "", rendering: WorkflowType.Rendering, output: WorkflowType.Output? = nil) {
+        self.workflowType = type
+        self.key = key
+        self.rendering = rendering
+        self.output = output
     }
 }
