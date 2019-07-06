@@ -23,22 +23,15 @@ import com.squareup.workflow.Worker
 import com.squareup.workflow.Workflow
 import com.squareup.workflow.WorkflowHost
 import com.squareup.workflow.asWorker
+import com.squareup.workflow.runWorkflow
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.ObsoleteCoroutinesApi
-import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.BroadcastChannel
-import kotlinx.coroutines.channels.Channel.Factory.CONFLATED
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ReceiveChannel
-import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.produceIn
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.selectUnbiased
@@ -74,8 +67,6 @@ class TerminalWorkflowRunner(
   // when invoking from coroutines. This entire function is blocking however, so we don't care.
   @Suppress("BlockingMethodInNonBlockingContext")
   fun run(workflow: TerminalWorkflow): ExitCode = runBlocking {
-    val configs = BroadcastChannel<TerminalInput>(CONFLATED)
-    val host = hostFactory.run(workflow, configs.asFlow(), context = coroutineContext)
     val keyStrokesChannel = screen.listenForKeyStrokesOn(this + ioDispatcher)
     val keyStrokesWorker = keyStrokesChannel.asWorker()
     val resizes = screen.terminal.listenForResizesOn(this)
@@ -86,7 +77,7 @@ class TerminalWorkflowRunner(
     try {
       screen.startScreen()
       try {
-        runTerminalWorkflow(screen, configs, host, keyStrokesWorker, resizes)
+        runTerminalWorkflow(workflow, screen, keyStrokesWorker, resizes)
       } finally {
         screen.stopScreen()
       }
@@ -102,22 +93,23 @@ class TerminalWorkflowRunner(
 @Suppress("BlockingMethodInNonBlockingContext")
 @UseExperimental(FlowPreview::class, ExperimentalCoroutinesApi::class)
 private suspend fun runTerminalWorkflow(
+  workflow: TerminalWorkflow,
   screen: TerminalScreen,
-  inputs: SendChannel<TerminalInput>,
-  host: WorkflowHost<ExitCode, TerminalRendering>,
   keyStrokes: Worker<KeyStroke>,
   resizes: ReceiveChannel<TerminalSize>
-): ExitCode = coroutineScope {
+): ExitCode {
   var input = TerminalInput(screen.terminalSize.toSize(), keyStrokes)
+  val inputs = ConflatedBroadcastChannel(input)
 
-  // Need to send an initial input for the workflow to start running.
-  inputs.offer(input)
+  return runWorkflow(workflow, inputs.asFlow()) { renderings, outputs ->
+
+  }
 
   // Launch the render loop in a new coroutine, so this coroutine can just sit around and wait
   // for the workflow to emit an output.
   val renderJob = launch {
-    val renderings = host.renderingsAndSnapshots.map { it.rendering }
-        .produceIn(this)
+//    val renderings = host.renderingsAndSnapshots.map { it.rendering }
+//        .produceIn(this)
 
     while (true) {
       val rendering = selectUnbiased<TerminalRendering> {

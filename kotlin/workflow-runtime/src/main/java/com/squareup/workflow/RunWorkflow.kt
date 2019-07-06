@@ -15,7 +15,8 @@
  */
 package com.squareup.workflow
 
-import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
@@ -24,21 +25,20 @@ import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import org.jetbrains.annotations.TestOnly
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind.AT_MOST_ONCE
 import kotlin.contracts.contract
+import kotlin.experimental.ExperimentalTypeInference
 
 /**
- * Tuple of rendering and snapshot used by [runWorkflow].
+ * Don't use this typealias for the public API, better to just use the function directly so it's
+ * more obvious how to use it.
  */
-data class RenderingAndSnapshot<out RenderingT>(
-  val rendering: RenderingT,
-  val snapshot: Snapshot
-)
-
 @UseExperimental(ExperimentalCoroutinesApi::class)
-internal typealias Configurator <O, R> = CoroutineScope.(
+internal typealias Configurator <O, R, T> = WorkflowScope<T>.(
   renderingsAndSnapshots: Flow<RenderingAndSnapshot<R>>,
   outputs: Flow<O>
 ) -> Unit
@@ -46,18 +46,23 @@ internal typealias Configurator <O, R> = CoroutineScope.(
 /**
  *  TODO write documentation
  */
-@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class, ExperimentalContracts::class)
-suspend fun <InputT, OutputT : Any, RenderingT> runWorkflow(
+@UseExperimental(
+    ExperimentalCoroutinesApi::class,
+    FlowPreview::class,
+    ExperimentalContracts::class,
+    ExperimentalTypeInference::class
+)
+suspend fun <InputT, OutputT : Any, RenderingT, ResultT> runWorkflow(
   workflow: Workflow<InputT, OutputT, RenderingT>,
   inputs: Flow<InputT>,
   initialSnapshot: Snapshot? = null,
-  beforeStart: CoroutineScope.(
+  @BuilderInference beforeStart: WorkflowScope<ResultT>.(
     renderingsAndSnapshots: Flow<RenderingAndSnapshot<RenderingT>>,
     outputs: Flow<OutputT>
   ) -> Unit
-): Nothing {
+): ResultT {
   contract { callsInPlace(beforeStart, AT_MOST_ONCE) }
-  runWorkflowImpl(
+  return runWorkflowImpl(
       workflow.asStatefulWorkflow(),
       inputs,
       initialSnapshot = initialSnapshot,
@@ -70,18 +75,23 @@ suspend fun <InputT, OutputT : Any, RenderingT> runWorkflow(
  *  TODO write documentation
  */
 @TestOnly
-@UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class, ExperimentalContracts::class)
-suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowForTestFromState(
+@UseExperimental(
+    ExperimentalCoroutinesApi::class,
+    FlowPreview::class,
+    ExperimentalContracts::class,
+    ExperimentalTypeInference::class
+)
+suspend fun <InputT, StateT, OutputT : Any, RenderingT, ResultT> runWorkflowForTestFromState(
   workflow: StatefulWorkflow<InputT, StateT, OutputT, RenderingT>,
   inputs: Flow<InputT>,
   initialState: StateT,
-  beforeStart: CoroutineScope.(
+  @BuilderInference beforeStart: WorkflowScope<ResultT>.(
     renderingsAndSnapshots: Flow<RenderingAndSnapshot<RenderingT>>,
     outputs: Flow<OutputT>
   ) -> Unit
-): Nothing {
+): ResultT {
   contract { callsInPlace(beforeStart, AT_MOST_ONCE) }
-  runWorkflowImpl(
+  return runWorkflowImpl(
       workflow,
       inputs,
       initialState = initialState,
@@ -94,15 +104,16 @@ suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowForTestFromSt
  *  TODO write documentation
  */
 @UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class)
-private suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowImpl(
+private suspend fun <InputT, StateT, OutputT : Any, RenderingT, ResultT> runWorkflowImpl(
   workflow: StatefulWorkflow<InputT, StateT, OutputT, RenderingT>,
   inputs: Flow<InputT>,
   initialSnapshot: Snapshot?,
   initialState: StateT?,
-  beforeStart: Configurator<OutputT, RenderingT>
-): Nothing = coroutineScope {
+  beforeStart: Configurator<OutputT, RenderingT, ResultT>
+): ResultT = coroutineScope {
   val renderingsAndSnapshots = ConflatedBroadcastChannel<RenderingAndSnapshot<RenderingT>>()
   val outputs = BroadcastChannel<OutputT>(capacity = 1)
+  val resultDeferred = CompletableDeferred<ResultT>(parent = coroutineContext[Job])
 
   // Ensure we close the channels when we're done, so that they propagate errors.
   coroutineContext[Job]!!.invokeOnCompletion { cause ->
@@ -113,16 +124,34 @@ private suspend fun <InputT, StateT, OutputT : Any, RenderingT> runWorkflowImpl(
     outputs.close(realCause)
   }
 
-  // Give the caller a chance to start collecting outputs.
-  beforeStart(renderingsAndSnapshots.asFlow(), outputs.asFlow())
+  // Launch a new coroutine to actually run the runtime. This is the coroutine that will get
+  // cancelled when beforeStart calls WorkflowScope.finishWorkflow.
+  launch {
+    val workflowJob = coroutineContext[Job]!!
+    @Suppress("ThrowableNotThrown")
+    val workflowScope = WorkflowScope<ResultT>(this) { result ->
+      workflowJob.cancel(CancellationException("Workflow was finished normally"))
+      return@WorkflowScope resultDeferred.complete(result)
+    }
 
-  // Run the workflow processing loop forever, or until it fails or is cancelled.
-  runWorkflowLoop(
-      workflow,
-      inputs,
-      initialSnapshot = initialSnapshot,
-      initialState = initialState,
-      onRendering = renderingsAndSnapshots::send,
-      onOutput = outputs::send
-  )
+    // Give the caller a chance to start collecting outputs.
+    beforeStart(workflowScope, renderingsAndSnapshots.asFlow(), outputs.asFlow())
+
+    // Yield to allow any coroutines created by beforeSetup to collect the flows to start.
+    // This means that collection will start before the runtime, even if launch(UNDISPATCHED) is not
+    // used.
+    yield()
+
+    // Run the workflow processing loop forever, or until it fails or is cancelled.
+    runWorkflowLoop(
+        workflow,
+        inputs,
+        initialSnapshot = initialSnapshot,
+        initialState = initialState,
+        onRendering = renderingsAndSnapshots::send,
+        onOutput = outputs::send
+    )
+  }
+
+  return@coroutineScope resultDeferred.await()
 }

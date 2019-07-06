@@ -21,24 +21,17 @@ import com.squareup.workflow.RenderingAndSnapshot
 import com.squareup.workflow.Snapshot
 import com.squareup.workflow.StatefulWorkflow
 import com.squareup.workflow.Workflow
-import com.squareup.workflow.WorkflowHost
+import com.squareup.workflow.runWorkflow
 import com.squareup.workflow.runWorkflowForTestFromState
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.InternalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.channels.BroadcastChannel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
+import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.channels.SendChannel
-import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onEach
@@ -216,11 +209,23 @@ fun <T, InputT, OutputT : Any, RenderingT>
       snapshot: Snapshot? = null,
       context: CoroutineContext = EmptyCoroutineContext,
       block: WorkflowTester<InputT, OutputT, RenderingT>.() -> T
-    ): T = test(block, context) { factory, inputs ->
+    ): T /*= test(block, context) { factory, inputs ->
       inputs.offer(input)
       factory.run(this, inputs.asFlow(), snapshot)
-    }
+    }*/
 // @formatter:on
+{
+  val inputs = ConflatedBroadcastChannel(input)
+  return runBlocking(context) {
+    runWorkflow(this@testFromStart, inputs.asFlow(), snapshot) { r, o ->
+      val tester = WorkflowTester(inputs, r, o, coroutineContext)
+      tester.start()
+      launch {
+        finishWorkflow(block(tester))
+      }
+    }
+  }
+}
 
 /**
  * Creates a [WorkflowTester] to run this workflow for unit testing.
@@ -249,31 +254,17 @@ fun <T, InputT, StateT, OutputT : Any, RenderingT>
       initialState: StateT,
       context: CoroutineContext = EmptyCoroutineContext,
       block: WorkflowTester<InputT, OutputT, RenderingT>.() -> T
-    ): T  /*test(block, context) { factory, inputs ->
-      inputs.offer(input)
-      factory.runTestFromState(this, inputs.asFlow(), initialState)
-    }*/
+    ): T
 // @formatter:on
 {
-  val result = CompletableDeferred<T>()
-  val inputs = BroadcastChannel<InputT>(capacity = 1)
-  runBlocking {
-    try {
-      runWorkflowForTestFromState(this@testFromState, inputs.asFlow(), initialState) { r, o ->
-        val workflowJob = coroutineContext[Job]!!
-        workflowJob.invokeOnCompletion {
-          result.cancel(it as? CancellationException ?: CancellationException("", it))
-        }
-
-        val tester = WorkflowTester(inputs, r, o, coroutineContext)
-        tester.start()
-        launch {
-          result.complete(block(tester))
-          workflowJob.cancel()
-        }
+  val inputs = ConflatedBroadcastChannel(input)
+  return runBlocking(context) {
+    runWorkflowForTestFromState(this@testFromState, inputs.asFlow(), initialState) { r, o ->
+      val tester = WorkflowTester(inputs, r, o, coroutineContext)
+      tester.start()
+      launch {
+        finishWorkflow(block(tester))
       }
-    } catch (e: CancellationException) {
-      return@runBlocking result.await()
     }
   }
 }
@@ -294,52 +285,3 @@ fun <StateT, OutputT : Any, RenderingT>
       block: WorkflowTester<Unit, OutputT, RenderingT>.() -> Unit
     ) = testFromState(Unit, initialState, context, block)
 // @formatter:on
-
-@UseExperimental(InternalCoroutinesApi::class)
-private fun <T, I, O : Any, R> test(
-  testBlock: (WorkflowTester<I, O, R>) -> T,
-  baseContext: CoroutineContext,
-  starter: (hostFactory: WorkflowHost.Factory, inputs: Channel<I>) -> WorkflowHost<O, R>
-): T {
-  val context = Dispatchers.Unconfined + baseContext + Job(parent = baseContext[Job])
-  // We can't use a BroadcastChannel here because starter may need to queue up the initial input,
-  // which would get dropped by an unsubscribed BroadcastChannel.
-  val inputs = Channel<I>(capacity = 1)
-  @Suppress("ReplaceSingleLineLet")
-//  val host = WorkflowHost.Factory(context)
-//      .let { starter(it, inputs) }
-//      .let { WorkflowTester(inputs, it, context) }
-//      .apply { start() }
-//
-
-//  var error: Throwable? = null
-//  try {
-//    return testBlock(host)
-//  } catch (e: Throwable) {
-//    error = e
-//    throw e
-//  } finally {
-//    if (error != null) {
-//      context.cancel(
-//          if (error is CancellationException) error else CancellationException(null, error)
-//      )
-//      val cancellationCause = context[Job]!!.getCancellationException()
-//          .cause
-//      if (cancellationCause != error && cancellationCause != null) {
-//        error.addSuppressed(cancellationCause)
-//      }
-//    } else {
-//      // Cancel the Job to ensure everything gets cleaned up.
-//      context.cancel()
-//    }
-//  }
-}
-
-/**
- * Turns a _non-broadcast_ channel into a Flow. Normally this isn't safe because if there are
- * multiple collectors they will all get different values. However since this is only used
- * internally, we know that these flows will only be collected once by [WorkflowHost].
- */
-private fun <E> ReceiveChannel<E>.asFlow(): Flow<E> = flow {
-  consumeEach { emit(it) }
-}
