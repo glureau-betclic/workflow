@@ -21,7 +21,6 @@ import com.googlecode.lanterna.screen.TerminalScreen
 import com.googlecode.lanterna.terminal.DefaultTerminalFactory
 import com.squareup.workflow.Worker
 import com.squareup.workflow.Workflow
-import com.squareup.workflow.WorkflowHost
 import com.squareup.workflow.asWorker
 import com.squareup.workflow.runWorkflow
 import kotlinx.coroutines.CoroutineDispatcher
@@ -32,10 +31,14 @@ import kotlinx.coroutines.ObsoleteCoroutinesApi
 import kotlinx.coroutines.channels.ConflatedBroadcastChannel
 import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.selects.selectUnbiased
-import kotlin.coroutines.EmptyCoroutineContext
 
 /**
  * Hosts [Workflow]s that:
@@ -43,13 +46,10 @@ import kotlin.coroutines.EmptyCoroutineContext
  *  - renders the text to display on the terminal
  *  - finishes by emitting an exit code that should be passed to [kotlin.system.exitProcess].
  *
- * @param hostFactory Used to create the actual [WorkflowHost] that hosts workflows. Any dispatcher
- * configured on the host will be ignored, to ensure that key events stay in sync with renderings.
  * @param ioDispatcher Defaults to [Dispatchers.IO] and is used to listen for key events using
  * blocking APIs.
  */
 class TerminalWorkflowRunner(
-  private val hostFactory: WorkflowHost.Factory = WorkflowHost.Factory(EmptyCoroutineContext),
   private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
@@ -77,7 +77,7 @@ class TerminalWorkflowRunner(
     try {
       screen.startScreen()
       try {
-        runTerminalWorkflow(workflow, screen, keyStrokesWorker, resizes)
+        return@runBlocking runTerminalWorkflow(workflow, screen, keyStrokesWorker, resizes)
       } finally {
         screen.stopScreen()
       }
@@ -101,60 +101,50 @@ private suspend fun runTerminalWorkflow(
   var input = TerminalInput(screen.terminalSize.toSize(), keyStrokes)
   val inputs = ConflatedBroadcastChannel(input)
 
-  return runWorkflow(workflow, inputs.asFlow()) { renderings, outputs ->
+  return runWorkflow(workflow, inputs.asFlow()) { renderingsAndSnapshots, outputs ->
+    val renderings = renderingsAndSnapshots.map { it.rendering }
+        .produceIn(this)
 
-  }
+    // Stop the runtime and return the exit code as soon as the workflow emits one.
+    outputs.onEach { finishWorkflow(it) }
+        .launchIn(this)
 
-  // Launch the render loop in a new coroutine, so this coroutine can just sit around and wait
-  // for the workflow to emit an output.
-  val renderJob = launch {
-//    val renderings = host.renderingsAndSnapshots.map { it.rendering }
-//        .produceIn(this)
-
-    while (true) {
-      val rendering = selectUnbiased<TerminalRendering> {
-        resizes.onReceive {
-          screen.doResizeIfNecessary()
-              ?.let {
-                // If the terminal was resized since the last iteration, we need to notify the
-                // workflow.
-                input = input.copy(size = it.toSize())
-              }
-
-          // Publish config changes to the workflow.
-          inputs.send(input)
-
-          // Sending that new input invalidated the lastRendering, so we don't want to
-          // re-iterate until we have a new rendering with a fresh event handler. It also
-          // triggered a render pass, so we can just retrieve that immediately.
-          return@onReceive renderings.receive()
-        }
-
-        renderings.onReceive { it }
-      }
-
-      screen.clear()
-      screen.newTextGraphics()
-          .apply {
-            foregroundColor = rendering.textColor.toTextColor()
-            backgroundColor = rendering.backgroundColor.toTextColor()
-            rendering.text.lineSequence()
-                .forEachIndexed { index, line ->
-                  putString(TOP_LEFT_CORNER.withRelativeRow(index), line)
+    launch {
+      while (true) {
+        val rendering = selectUnbiased<TerminalRendering> {
+          resizes.onReceive {
+            screen.doResizeIfNecessary()
+                ?.let {
+                  // If the terminal was resized since the last iteration, we need to notify the
+                  // workflow.
+                  input = input.copy(size = it.toSize())
                 }
+
+            // Publish config changes to the workflow.
+            inputs.send(input)
+
+            // Sending that new input invalidated the lastRendering, so we don't want to
+            // re-iterate until we have a new rendering with a fresh event handler. It also
+            // triggered a render pass, so we can just retrieve that immediately.
+            return@onReceive renderings.receive()
           }
 
-      screen.refresh(COMPLETE)
+          renderings.onReceive { it }
+        }
+
+        screen.clear()
+        screen.newTextGraphics()
+            .apply {
+              foregroundColor = rendering.textColor.toTextColor()
+              backgroundColor = rendering.backgroundColor.toTextColor()
+              rendering.text.lineSequence()
+                  .forEachIndexed { index, line ->
+                    putString(TOP_LEFT_CORNER.withRelativeRow(index), line)
+                  }
+            }
+
+        screen.refresh(COMPLETE)
+      }
     }
   }
-
-  // Start collecting from outputs before starting the workflow host, in case it emits immediately.
-  val exitCodeDeferred = async { host.outputs.first() }
-  val workflowJob = host.start()
-
-  // Stop the runner and return the exit code as soon as the workflow emits one.
-  val exitCode = exitCodeDeferred.await()
-  workflowJob.cancel()
-  renderJob.cancel()
-  return@coroutineScope exitCode
 }

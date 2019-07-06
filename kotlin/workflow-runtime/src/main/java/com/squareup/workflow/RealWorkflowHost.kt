@@ -31,7 +31,7 @@ import kotlin.coroutines.CoroutineContext
 @UseExperimental(ExperimentalCoroutinesApi::class, FlowPreview::class)
 internal class RealWorkflowHost<O : Any, R>(
   context: CoroutineContext,
-  private val run: suspend (Configurator<O, R>) -> Nothing
+  private val run: suspend (Configurator<O, R, Nothing>) -> Nothing
 ) : WorkflowHost<O, R> {
 
   /**

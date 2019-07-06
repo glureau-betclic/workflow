@@ -16,7 +16,6 @@
 package com.squareup.workflow.internal
 
 import org.junit.Test
-import kotlin.test.fail
 
 class RunWorkflowTest {
 

@@ -4,6 +4,7 @@ import com.squareup.workflow.Configurator
 import com.squareup.workflow.RealWorkflowHost
 import com.squareup.workflow.RenderingAndSnapshot
 import com.squareup.workflow.Snapshot
+import com.squareup.workflow.WorkflowScope
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers.Unconfined
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -26,6 +27,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.fail
+
+private val TEST_WORKFLOW_SCOPE
+  get() = WorkflowScope<Nothing>(CoroutineScope(Unconfined)) { fail() }
 
 @UseExperimental(
     InternalCoroutinesApi::class,
@@ -82,7 +87,7 @@ class RealWorkflowHostTest {
   @Test fun `exceptions from renderings collector cancels host`() {
     val host = RealWorkflowHost<Unit, Unit>(Unconfined) { configurator ->
       configurator(
-          CoroutineScope(Unconfined),
+          TEST_WORKFLOW_SCOPE,
           flowOf(RenderingAndSnapshot(Unit, Snapshot.EMPTY)),
           emptyFlow()
       )
@@ -102,7 +107,7 @@ class RealWorkflowHostTest {
   @Test fun `exceptions from outputs collector cancels host`() {
     val host = RealWorkflowHost<Unit, Unit>(Unconfined) { configurator ->
       configurator(
-          CoroutineScope(Unconfined),
+          TEST_WORKFLOW_SCOPE,
           emptyFlow(),
           flowOf(Unit)
       )
@@ -176,7 +181,7 @@ class RealWorkflowHostTest {
   @Test fun `renderings flow replays to new collectors`() {
     val host = RealWorkflowHost<Nothing, String>(Unconfined) { configurator ->
       configurator(
-          CoroutineScope(Unconfined),
+          TEST_WORKFLOW_SCOPE,
           flowOf(RenderingAndSnapshot("foo", Snapshot.EMPTY)),
           emptyFlow()
       )
@@ -191,7 +196,7 @@ class RealWorkflowHostTest {
   @Test fun `renderings flow is multicasted`() {
     val host = RealWorkflowHost<Nothing, String>(Unconfined) { configurator ->
       configurator(
-          CoroutineScope(Unconfined),
+          TEST_WORKFLOW_SCOPE,
           flowOf(
               RenderingAndSnapshot("one", Snapshot.EMPTY),
               RenderingAndSnapshot("two", Snapshot.EMPTY)
@@ -217,7 +222,7 @@ class RealWorkflowHostTest {
   @Test fun `outputs flow is multicasted`() {
     val host = RealWorkflowHost<String, Unit>(Unconfined) { configurator ->
       configurator(
-          CoroutineScope(Unconfined),
+          TEST_WORKFLOW_SCOPE,
           emptyFlow(),
           flowOf("one", "two")
       )
@@ -258,7 +263,7 @@ class RealWorkflowHostTest {
   @Test fun `renderings flow has no backpressure`() {
     val host = RealWorkflowHost<Nothing, String>(Unconfined) { configurator ->
       configurator(
-          CoroutineScope(Unconfined),
+          TEST_WORKFLOW_SCOPE,
           flowOf(
               RenderingAndSnapshot("one", Snapshot.EMPTY),
               RenderingAndSnapshot("two", Snapshot.EMPTY),
@@ -279,7 +284,7 @@ class RealWorkflowHostTest {
 
   @Suppress("UNUSED_PARAMETER")
   private suspend fun <O, R> runForever(
-    configurator: Configurator<O, R>
+    configurator: Configurator<O, R, Nothing>
   ): Nothing {
     suspendCancellableCoroutine<Nothing> { }
   }

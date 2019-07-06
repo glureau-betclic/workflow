@@ -28,9 +28,6 @@ import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
 import org.jetbrains.annotations.TestOnly
-import kotlin.contracts.ExperimentalContracts
-import kotlin.contracts.InvocationKind.AT_MOST_ONCE
-import kotlin.contracts.contract
 import kotlin.experimental.ExperimentalTypeInference
 
 /**
@@ -49,7 +46,6 @@ internal typealias Configurator <O, R, T> = WorkflowScope<T>.(
 @UseExperimental(
     ExperimentalCoroutinesApi::class,
     FlowPreview::class,
-    ExperimentalContracts::class,
     ExperimentalTypeInference::class
 )
 suspend fun <InputT, OutputT : Any, RenderingT, ResultT> runWorkflow(
@@ -61,7 +57,6 @@ suspend fun <InputT, OutputT : Any, RenderingT, ResultT> runWorkflow(
     outputs: Flow<OutputT>
   ) -> Unit
 ): ResultT {
-  contract { callsInPlace(beforeStart, AT_MOST_ONCE) }
   return runWorkflowImpl(
       workflow.asStatefulWorkflow(),
       inputs,
@@ -78,7 +73,6 @@ suspend fun <InputT, OutputT : Any, RenderingT, ResultT> runWorkflow(
 @UseExperimental(
     ExperimentalCoroutinesApi::class,
     FlowPreview::class,
-    ExperimentalContracts::class,
     ExperimentalTypeInference::class
 )
 suspend fun <InputT, StateT, OutputT : Any, RenderingT, ResultT> runWorkflowForTestFromState(
@@ -90,7 +84,6 @@ suspend fun <InputT, StateT, OutputT : Any, RenderingT, ResultT> runWorkflowForT
     outputs: Flow<OutputT>
   ) -> Unit
 ): ResultT {
-  contract { callsInPlace(beforeStart, AT_MOST_ONCE) }
   return runWorkflowImpl(
       workflow,
       inputs,
